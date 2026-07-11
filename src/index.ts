@@ -133,6 +133,15 @@ function createMcpServer(): Server {
 				},
 			},
 			{
+				name: 'get_workout_zones',
+				description: 'Get heart rate zone breakdown (time in Zone 0-5) for individual workouts, useful for analyzing run and workout intensity distribution.',
+				inputSchema: {
+					type: 'object',
+					properties: { days: { type: 'number', description: 'Number of days to analyze (default: 14, max: 90)' } },
+					required: [],
+				},
+			},
+			{
 				name: 'sync_data',
 				description: 'Manually trigger a data sync from Whoop.',
 				inputSchema: {
@@ -154,7 +163,7 @@ function createMcpServer(): Server {
 		const typedArgs = (args ?? {}) as ToolArguments;
 
 		try {
-			const dataTools = ['get_today', 'get_recovery_trends', 'get_sleep_analysis', 'get_strain_history'];
+			const dataTools = ['get_today', 'get_recovery_trends', 'get_sleep_analysis', 'get_strain_history', 'get_workout_zones'];
 			if (dataTools.includes(name)) {
 				const tokens = db.getTokens();
 				if (!tokens) {
@@ -282,6 +291,29 @@ function createMcpServer(): Server {
 					return { content: [{ type: 'text', text: response }] };
 				}
 
+				case 'get_workout_zones': {
+					const days = validateDays(typedArgs.days);
+					const endDate = new Date();
+					const startDate = new Date();
+					startDate.setDate(startDate.getDate() - days);
+					const workouts = db.getWorkoutsByDateRange(startDate.toISOString(), endDate.toISOString());
+
+					if (workouts.length === 0) {
+						return { content: [{ type: 'text', text: 'No workout data available for the requested period.' }] };
+					}
+
+					let response = `# Workout Heart Rate Zones (Last ${days} Days)\n\n`;
+					response += '| Date | Sport ID | Duration | Strain | Zone 0 | Zone 1 | Zone 2 | Zone 3 | Zone 4 | Zone 5 |\n';
+					response += '|------|----------|----------|--------|--------|--------|--------|--------|--------|--------|\n';
+
+					for (const w of workouts) {
+						const durationMs = new Date(w.end_time).getTime() - new Date(w.start_time).getTime();
+						response += `| ${formatDate(w.start_time)} | ${w.sport_id} | ${formatDuration(durationMs)} | ${w.strain?.toFixed(1) ?? 'N/A'} | ${formatDuration(w.zone_zero_milli)} | ${formatDuration(w.zone_one_milli)} | ${formatDuration(w.zone_two_milli)} | ${formatDuration(w.zone_three_milli)} | ${formatDuration(w.zone_four_milli)} | ${formatDuration(w.zone_five_milli)} |\n`;
+					}
+
+					return { content: [{ type: 'text', text: response }] };
+				}
+
 				case 'sync_data': {
 					const tokens = db.getTokens();
 					if (!tokens) {
@@ -342,17 +374,17 @@ async function main(): Promise<void> {
 	} else {
 		const app = express();
 		app.use(express.json());
-app.use((req: Request, res: Response, next: () => void) => {
-	res.header('Access-Control-Allow-Origin', '*');
-	res.header('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
-	res.header('Access-Control-Allow-Headers', 'Content-Type, Mcp-Session-Id, mcp-session-id, Authorization');
-	res.header('Access-Control-Expose-Headers', 'Mcp-Session-Id, mcp-session-id');
-	if (req.method === 'OPTIONS') {
-		res.sendStatus(204);
-		return;
-	}
-	next();
-});
+		app.use((req: Request, res: Response, next: () => void) => {
+			res.header('Access-Control-Allow-Origin', '*');
+			res.header('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+			res.header('Access-Control-Allow-Headers', 'Content-Type, Mcp-Session-Id, mcp-session-id, Authorization');
+			res.header('Access-Control-Expose-Headers', 'Mcp-Session-Id, mcp-session-id');
+			if (req.method === 'OPTIONS') {
+				res.sendStatus(204);
+				return;
+			}
+			next();
+		});
 
 		app.get('/callback', async (req: Request, res: Response) => {
 			const code = req.query.code as string | undefined;
